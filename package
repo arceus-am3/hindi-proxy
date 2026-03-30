@@ -1,0 +1,5 @@
+{
+  "name": "desidub-vercel-proxy",
+  "private": true,
+  "type": "module"
+}
