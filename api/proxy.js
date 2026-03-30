@@ -74,7 +74,7 @@ export default async function handler(req, res) {
         ok: true,
         message: "Anime HLS proxy running",
         usage: `${getOrigin(req)}/api/proxy?url=${encodeURIComponent("https://example.com/master.m3u8")}`,
-        note: "referer optional hai. m3u8 se auto infer ho jayega."
+        note: "referer  m3u8&referer=https%3A%2F%2Fdesidubanime.rpmstream.live%2F%23q5wdp."
       });
       return;
     }
