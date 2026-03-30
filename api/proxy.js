@@ -29,7 +29,10 @@ const ALLOWED_HOST_PATTERNS = [
 const REQUEST_HEADER_PASSTHROUGH = [
   "range",
   "if-none-match",
-  "if-modified-since"
+  "if-modified-since",
+  "content-type",
+  "x-requested-with",
+  "accept"
 ];
 const RESPONSE_HEADER_PASSTHROUGH = [
   "content-type",
@@ -59,8 +62,8 @@ export default async function handler(req, res) {
       return;
     }
 
-    if (!["GET", "HEAD"].includes(req.method)) {
-      sendJson(res, 405, { error: "Only GET, HEAD, OPTIONS allowed" });
+    if (!["GET", "HEAD", "POST"].includes(req.method)) {
+      sendJson(res, 405, { error: "Only GET, HEAD, POST, OPTIONS allowed" });
       return;
     }
 
@@ -88,6 +91,7 @@ export default async function handler(req, res) {
     const upstream = await fetch(upstreamUrl.toString(), {
       method: req.method,
       headers: buildUpstreamHeaders(req.headers, referer),
+      body: req.method === "POST" ? req : undefined,
       redirect: "follow"
     });
 
@@ -141,7 +145,7 @@ function getOrigin(req) {
 
 function addCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "*");
 }
 
@@ -298,3 +302,6 @@ function safeOrigin(value) {
 function cleanText(value) {
   return String(value ?? "").trim();
 }
+
+
+
