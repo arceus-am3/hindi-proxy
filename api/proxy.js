@@ -1,4 +1,4 @@
-const { Readable } = require("node:stream");
+import { Readable } from "node:stream";
 
 const DEFAULT_REFERER = "https://www.desidubanime.me/";
 const USER_AGENT =
@@ -10,6 +10,8 @@ const PLAYLIST_CONTENT_TYPES = [
   "audio/x-mpegurl"
 ];
 const ALLOWED_HOSTS = new Set([
+  "203.188.166.98",
+  "185.237.107.230",
   "desidubanime.rpmstream.live",
   "pro.iqsmartgames.com",
   "gdmirrorbot.nl"
@@ -41,111 +43,121 @@ const RESPONSE_HEADER_PASSTHROUGH = [
   "content-disposition"
 ];
 
-module.exports = async function handler(req, res) {
-  const requestUrl = new URL(req.url, getOrigin(req));
-
-  setCorsHeaders(res);
-
-  if (req.method === "OPTIONS") {
-    res.statusCode = 204;
-    res.end();
-    return;
+export const config = {
+  api: {
+    bodyParser: false,
+    responseLimit: false
   }
-
-  if (!["GET", "HEAD"].includes(req.method || "GET")) {
-    return sendJson(res, 405, { error: "Only GET and HEAD allowed" });
-  }
-
-  if (!requestUrl.searchParams.has("url")) {
-    return sendJson(res, 200, {
-      ok: true,
-      message: "Anime HLS proxy running on Vercel",
-      usage: `${requestUrl.origin}/api/proxy?url=${encodeURIComponent("https://example.com/master.m3u8")}`,
-      note: "referer optional hai. m3u8 link se auto infer ho jayega."
-    });
-  }
-
-  const targetUrl = cleanText(requestUrl.searchParams.get("url"));
-  const referer = resolveProxyReferer(targetUrl, requestUrl.searchParams.get("referer"));
-
-  if (!targetUrl) {
-    return sendJson(res, 400, { error: "Missing url query parameter" });
-  }
-
-  const upstreamUrl = parseAllowedUrl(targetUrl);
-
-  if (!upstreamUrl) {
-    return sendJson(res, 403, { error: "Blocked upstream host" });
-  }
-
-  const upstream = await fetch(upstreamUrl.toString(), {
-    method: req.method === "HEAD" ? "HEAD" : "GET",
-    headers: buildUpstreamHeaders(req.headers, referer),
-    redirect: "follow"
-  });
-
-  if (!upstream.ok) {
-    return sendJson(res, upstream.status, { error: `Upstream fetch failed: ${upstream.status}` });
-  }
-
-  copyResponseHeaders(res, upstream.headers);
-
-  if (req.method === "HEAD") {
-    res.statusCode = upstream.status;
-    res.end();
-    return;
-  }
-
-  if (isPlaylistRequest(upstreamUrl, upstream.headers.get("content-type"))) {
-    const playlist = await upstream.text();
-    const rewritten = rewriteHlsPlaylist(
-      playlist,
-      upstreamUrl,
-      `${requestUrl.origin}/api/proxy`,
-      referer
-    );
-
-    res.statusCode = upstream.status;
-    res.setHeader("Content-Type", "application/vnd.apple.mpegurl; charset=utf-8");
-    res.removeHeader("Content-Length");
-    res.end(rewritten);
-    return;
-  }
-
-  res.statusCode = upstream.status;
-
-  if (!upstream.body) {
-    res.end();
-    return;
-  }
-
-  Readable.fromWeb(upstream.body).pipe(res);
 };
 
+export default async function handler(req, res) {
+  try {
+    addCors(res);
+
+    if (req.method === "OPTIONS") {
+      res.status(204).end();
+      return;
+    }
+
+    if (!["GET", "HEAD"].includes(req.method)) {
+      sendJson(res, 405, { error: "Only GET, HEAD, OPTIONS allowed" });
+      return;
+    }
+
+    const requestUrl = new URL(req.url, getOrigin(req));
+
+    if (!requestUrl.searchParams.has("url")) {
+      sendJson(res, 200, {
+        ok: true,
+        message: "Anime HLS proxy running",
+        usage: `${getOrigin(req)}/api/proxy?url=${encodeURIComponent("https://example.com/master.m3u8")}`,
+        note: "referer optional hai. m3u8 se auto infer ho jayega."
+      });
+      return;
+    }
+
+    const targetUrl = cleanText(requestUrl.searchParams.get("url"));
+    const referer = resolveProxyReferer(targetUrl, requestUrl.searchParams.get("referer"));
+    const upstreamUrl = parseAllowedUrl(targetUrl);
+
+    if (!upstreamUrl) {
+      sendJson(res, 403, { error: "Blocked upstream host" });
+      return;
+    }
+
+    const upstream = await fetch(upstreamUrl.toString(), {
+      method: req.method,
+      headers: buildUpstreamHeaders(req.headers, referer),
+      redirect: "follow"
+    });
+
+    if (!upstream.ok) {
+      sendJson(res, upstream.status, { error: `Upstream fetch failed: ${upstream.status}` });
+      return;
+    }
+
+    writeResponseHeaders(res, upstream.headers);
+
+    if (req.method === "HEAD") {
+      res.status(upstream.status).end();
+      return;
+    }
+
+    if (isPlaylistRequest(upstreamUrl, upstream.headers.get("content-type"))) {
+      const playlist = await upstream.text();
+      const rewritten = rewriteHlsPlaylist(
+        playlist,
+        upstreamUrl,
+        `${getOrigin(req)}/api/proxy`,
+        referer
+      );
+      res.setHeader("Content-Type", "application/vnd.apple.mpegurl; charset=utf-8");
+      res.removeHeader("Content-Length");
+      res.status(upstream.status).send(rewritten);
+      return;
+    }
+
+    res.status(upstream.status);
+
+    if (upstream.body) {
+      Readable.fromWeb(upstream.body).pipe(res);
+      return;
+    }
+
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    res.end(buffer);
+  } catch (error) {
+    sendJson(res, 500, {
+      error: error instanceof Error ? error.message : "Proxy error"
+    });
+  }
+}
+
 function getOrigin(req) {
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
   const protocol = req.headers["x-forwarded-proto"] || "https";
-  const host = req.headers.host || "localhost";
   return `${protocol}://${host}`;
 }
 
-function setCorsHeaders(res) {
+function addCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "*");
 }
 
-function sendJson(res, statusCode, payload) {
-  res.statusCode = statusCode;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(payload));
+function sendJson(res, status, data) {
+  addCors(res);
+  res.status(status).setHeader("Content-Type", "application/json; charset=utf-8");
+  res.send(JSON.stringify(data));
 }
 
 function buildUpstreamHeaders(requestHeaders, referer) {
   const headers = new Headers({
     "User-Agent": USER_AGENT,
-    "Accept": "*/*",
-    "Referer": referer
+    Accept: "*/*",
+    Referer: referer
   });
+
   const origin = safeOrigin(referer);
 
   if (origin) {
@@ -153,7 +165,7 @@ function buildUpstreamHeaders(requestHeaders, referer) {
   }
 
   for (const name of REQUEST_HEADER_PASSTHROUGH) {
-    const value = getHeaderValue(requestHeaders, name);
+    const value = requestHeaders[name];
 
     if (value) {
       headers.set(name, value);
@@ -163,7 +175,9 @@ function buildUpstreamHeaders(requestHeaders, referer) {
   return headers;
 }
 
-function copyResponseHeaders(res, sourceHeaders) {
+function writeResponseHeaders(res, sourceHeaders) {
+  addCors(res);
+
   for (const name of RESPONSE_HEADER_PASSTHROUGH) {
     const value = sourceHeaders.get(name);
 
@@ -271,17 +285,6 @@ function inferProxyReferer(targetUrl) {
   } catch {
     return "";
   }
-}
-
-function getHeaderValue(headersLike, name) {
-  const lower = String(name || "").toLowerCase();
-  const value = headersLike?.[lower] ?? headersLike?.[name];
-
-  if (Array.isArray(value)) {
-    return value[0] || "";
-  }
-
-  return value || "";
 }
 
 function safeOrigin(value) {
