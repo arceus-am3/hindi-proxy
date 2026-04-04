@@ -1,6 +1,7 @@
 import { Readable } from "node:stream";
 
 const DEFAULT_REFERER = "https://www.desidubanime.me/";
+const ANIMESALT_WORKER_PROXY = "https://anime-hindi.inanime-app.workers.dev/api/v2/proxy";
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
 const PLAYLIST_CONTENT_TYPES = [
@@ -88,15 +89,18 @@ export default async function handler(req, res) {
     const targetUrl = cleanText(requestUrl.searchParams.get("url"));
     const referer = resolveProxyReferer(targetUrl, requestUrl.searchParams.get("referer"));
     const upstreamUrl = parseAllowedUrl(targetUrl);
+    const workerFallbackUrl = buildWorkerFallbackUrl(upstreamUrl, referer);
 
     if (!upstreamUrl) {
       sendJson(res, 403, { error: "Blocked upstream host" });
       return;
     }
 
-    const upstream = await fetch(upstreamUrl.toString(), {
+    const upstream = await fetch((workerFallbackUrl || upstreamUrl).toString(), {
       method: req.method,
-      headers: buildUpstreamHeaders(req.headers, referer),
+      headers: workerFallbackUrl
+        ? buildProxyForwardHeaders(req.headers)
+        : buildUpstreamHeaders(req.headers, referer),
       body: req.method === "POST" ? req : undefined,
       redirect: "follow"
     });
@@ -110,6 +114,19 @@ export default async function handler(req, res) {
 
     if (req.method === "HEAD") {
       res.status(upstream.status).end();
+      return;
+    }
+
+    if (workerFallbackUrl) {
+      res.status(upstream.status);
+
+      if (upstream.body) {
+        Readable.fromWeb(upstream.body).pipe(res);
+        return;
+      }
+
+      const buffer = Buffer.from(await upstream.arrayBuffer());
+      res.end(buffer);
       return;
     }
 
@@ -173,6 +190,23 @@ function buildUpstreamHeaders(requestHeaders, referer) {
   if (origin) {
     headers.set("Origin", origin);
   }
+
+  for (const name of REQUEST_HEADER_PASSTHROUGH) {
+    const value = requestHeaders[name];
+
+    if (value) {
+      headers.set(name, value);
+    }
+  }
+
+  return headers;
+}
+
+function buildProxyForwardHeaders(requestHeaders) {
+  const headers = new Headers({
+    "User-Agent": USER_AGENT,
+    Accept: "*/*"
+  });
 
   for (const name of REQUEST_HEADER_PASSTHROUGH) {
     const value = requestHeaders[name];
@@ -264,6 +298,25 @@ function parseAllowedUrl(value) {
   } catch {
     return null;
   }
+}
+
+function buildWorkerFallbackUrl(upstreamUrl, referer) {
+  if (!upstreamUrl) {
+    return null;
+  }
+
+  if (!/^as-cdn\d+\.top$/i.test(cleanText(upstreamUrl.hostname))) {
+    return null;
+  }
+
+  const fallbackUrl = new URL(ANIMESALT_WORKER_PROXY);
+  fallbackUrl.searchParams.set("url", upstreamUrl.toString());
+
+  if (referer) {
+    fallbackUrl.searchParams.set("referer", referer);
+  }
+
+  return fallbackUrl;
 }
 
 function normalizeUpstreamUrl(url) {
