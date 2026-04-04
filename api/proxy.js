@@ -12,6 +12,7 @@ const PLAYLIST_CONTENT_TYPES = [
 const ALLOWED_HOSTS = new Set([
   "203.188.166.98",
   "185.237.107.230",
+  "as-cdn21.top",
   "desidubanime.rpmstream.live",
   "pro.iqsmartgames.com",
   "gdmirrorbot.nl"
@@ -23,6 +24,7 @@ const ALLOWED_HOST_SUFFIXES = [
   ".gdmirrorbot.nl"
 ];
 const ALLOWED_HOST_PATTERNS = [
+  /^as-cdn\d+\.top$/,
   /^185\.237\.\d{1,3}\.\d{1,3}$/,
   /^203\.188\.\d{1,3}\.\d{1,3}$/
 ];
@@ -74,6 +76,10 @@ export default async function handler(req, res) {
         ok: true,
         message: "Anime HLS proxy running",
         usage: `${getOrigin(req)}/api/proxy?url=${encodeURIComponent("https://example.com/master.m3u8")}`,
+        aliases: [
+          `${getOrigin(req)}/api/v1/proxy?url=${encodeURIComponent("https://example.com/master.m3u8")}`,
+          `${getOrigin(req)}/api/v2/proxy?url=${encodeURIComponent("https://example.com/master.m3u8")}`
+        ],
         note: "referer  m3u8&referer=https%3A%2F%2Fdesidubanime.rpmstream.live%2F%23q5wdp."
       });
       return;
@@ -251,13 +257,28 @@ function parseAllowedUrl(value) {
       ALLOWED_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix)) ||
       ALLOWED_HOST_PATTERNS.some((pattern) => pattern.test(host))
     ) {
-      return parsed;
+      return normalizeUpstreamUrl(parsed);
     }
 
     return null;
   } catch {
     return null;
   }
+}
+
+function normalizeUpstreamUrl(url) {
+  const normalized = new URL(url.toString());
+  const host = normalized.hostname.toLowerCase();
+
+  // Some RPMStream IP hosts expose expired HTTPS certs but serve HTTP correctly.
+  if (
+    normalized.protocol === "https:" &&
+    ALLOWED_HOST_PATTERNS.slice(1).some((pattern) => pattern.test(host))
+  ) {
+    normalized.protocol = "http:";
+  }
+
+  return normalized;
 }
 
 function resolveProxyReferer(targetUrl, explicitReferer) {
@@ -302,6 +323,5 @@ function safeOrigin(value) {
 function cleanText(value) {
   return String(value ?? "").trim();
 }
-
 
 
