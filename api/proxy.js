@@ -21,6 +21,9 @@ const ALLOWED_HOSTS = new Set([
 const ALLOWED_HOST_SUFFIXES = [
   ".rpmstream.live",
   ".playerp2p.live",
+  ".vidmoly.me",
+  ".vidmoly.net",
+  ".vmwesa.online",
   ".iqsmartgames.com",
   ".gdmirrorbot.nl"
 ];
@@ -48,6 +51,7 @@ const RESPONSE_HEADER_PASSTHROUGH = [
   "content-range",
   "content-disposition"
 ];
+const STREAM_CACHE_CONTROL = "public, max-age=60";
 
 export const config = {
   api: {
@@ -88,8 +92,17 @@ export default async function handler(req, res) {
 
     const targetUrl = cleanText(requestUrl.searchParams.get("url"));
     const referer = resolveProxyReferer(targetUrl, requestUrl.searchParams.get("referer"));
+    const preferredAudio = cleanText(
+      requestUrl.searchParams.get("audio") || requestUrl.searchParams.get("preferredAudio")
+    );
+    const audioMode = normalizeAudioMode(requestUrl.searchParams.get("audioMode"));
     const upstreamUrl = parseAllowedUrl(targetUrl);
-    const workerFallbackUrl = buildWorkerFallbackUrl(upstreamUrl, referer);
+    const workerFallbackUrl = buildWorkerFallbackUrl(
+      upstreamUrl,
+      referer,
+      preferredAudio,
+      audioMode
+    );
 
     if (!upstreamUrl) {
       sendJson(res, 403, { error: "Blocked upstream host" });
@@ -132,11 +145,20 @@ export default async function handler(req, res) {
 
     if (isPlaylistRequest(upstreamUrl, upstream.headers.get("content-type"))) {
       const playlist = await upstream.text();
-      const rewritten = rewriteHlsPlaylist(
+      const tunedPlaylist = rewritePreferredAudioPlaylist(
         playlist,
+        preferredAudio,
+        audioMode
+      );
+      const rewritten = rewriteHlsPlaylist(
+        tunedPlaylist,
         upstreamUrl,
         `${getOrigin(req)}/api/proxy`,
-        referer
+        referer,
+        {
+          preferredAudio,
+          audioMode
+        }
       );
       res.setHeader("Content-Type", "application/vnd.apple.mpegurl; charset=utf-8");
       res.removeHeader("Content-Length");
@@ -229,16 +251,18 @@ function writeResponseHeaders(res, sourceHeaders) {
       res.setHeader(name, value);
     }
   }
+
+  res.setHeader("Cache-Control", STREAM_CACHE_CONTROL);
 }
 
-function rewriteHlsPlaylist(playlistText, sourceUrl, proxyEndpoint, referer) {
+function rewriteHlsPlaylist(playlistText, sourceUrl, proxyEndpoint, referer, options = {}) {
   return playlistText
     .split(/\r?\n/)
-    .map((line) => rewritePlaylistLine(line, sourceUrl, proxyEndpoint, referer))
+    .map((line) => rewritePlaylistLine(line, sourceUrl, proxyEndpoint, referer, options))
     .join("\n");
 }
 
-function rewritePlaylistLine(line, sourceUrl, proxyEndpoint, referer) {
+function rewritePlaylistLine(line, sourceUrl, proxyEndpoint, referer, options = {}) {
   const trimmed = line.trim();
 
   if (!trimmed) {
@@ -250,17 +274,23 @@ function rewritePlaylistLine(line, sourceUrl, proxyEndpoint, referer) {
       const rewritten = buildMediaProxyUrl(
         proxyEndpoint,
         new URL(value, sourceUrl).toString(),
-        referer
+        referer,
+        options
       );
 
       return `URI="${rewritten}"`;
     });
   }
 
-  return buildMediaProxyUrl(proxyEndpoint, new URL(trimmed, sourceUrl).toString(), referer);
+  return buildMediaProxyUrl(
+    proxyEndpoint,
+    new URL(trimmed, sourceUrl).toString(),
+    referer,
+    options
+  );
 }
 
-function buildMediaProxyUrl(proxyEndpoint, targetUrl, referer = DEFAULT_REFERER) {
+function buildMediaProxyUrl(proxyEndpoint, targetUrl, referer = DEFAULT_REFERER, options = {}) {
   const proxyUrl = new URL(proxyEndpoint);
   proxyUrl.searchParams.set("url", targetUrl);
 
@@ -268,7 +298,158 @@ function buildMediaProxyUrl(proxyEndpoint, targetUrl, referer = DEFAULT_REFERER)
     proxyUrl.searchParams.set("referer", referer);
   }
 
+  const preferredAudio = cleanText(options.audio || options.preferredAudio);
+
+  if (preferredAudio) {
+    proxyUrl.searchParams.set("audio", preferredAudio);
+  }
+
+  const audioMode = normalizeAudioMode(options.audioMode);
+
+  if (audioMode) {
+    proxyUrl.searchParams.set("audioMode", audioMode);
+  }
+
   return proxyUrl.toString();
+}
+
+function rewritePreferredAudioPlaylist(playlistText, preferredAudio, audioMode) {
+  const normalizedPreference = normalizeAudioPreference(preferredAudio);
+
+  if (!normalizedPreference) {
+    return playlistText;
+  }
+
+  const lines = playlistText.split(/\r?\n/);
+  const matchingIndexes = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+
+    if (!line.startsWith("#EXT-X-MEDIA:")) {
+      continue;
+    }
+
+    const attrs = parseManifestAttributes(line.slice("#EXT-X-MEDIA:".length));
+
+    if (cleanText(attrs.TYPE).toUpperCase() !== "AUDIO") {
+      continue;
+    }
+
+    if (matchesPreferredAudio(attrs, normalizedPreference)) {
+      matchingIndexes.push(index);
+    }
+  }
+
+  if (!matchingIndexes.length) {
+    return playlistText;
+  }
+
+  return lines
+    .map((line, index) => {
+      const trimmed = line.trim();
+
+      if (!trimmed.startsWith("#EXT-X-MEDIA:")) {
+        return line;
+      }
+
+      const attrs = parseManifestAttributes(trimmed.slice("#EXT-X-MEDIA:".length));
+
+      if (cleanText(attrs.TYPE).toUpperCase() !== "AUDIO") {
+        return line;
+      }
+
+      const matched = matchingIndexes.includes(index);
+
+      if (!matched && audioMode === "only") {
+        return "";
+      }
+
+      return updateManifestBooleanAttribute(
+        updateManifestBooleanAttribute(line, "DEFAULT", matched),
+        "AUTOSELECT",
+        matched
+      );
+    })
+    .filter((line) => line !== "")
+    .join("\n");
+}
+
+function updateManifestBooleanAttribute(line, name, enabled) {
+  const value = enabled ? "YES" : "NO";
+  const pattern = new RegExp(`([,])${name}=(YES|NO)`, "i");
+
+  if (pattern.test(line)) {
+    return line.replace(pattern, `$1${name}=${value}`);
+  }
+
+  return `${line},${name}=${value}`;
+}
+
+function parseManifestAttributes(input) {
+  const attrs = {};
+  const pattern = /([A-Z0-9-]+)=("(?:[^"\\]|\\.)*"|[^,]*)/gi;
+
+  for (const match of input.matchAll(pattern)) {
+    const key = cleanText(match[1]).toUpperCase();
+    const rawValue = cleanText(match[2]);
+    attrs[key] =
+      rawValue.startsWith("\"") && rawValue.endsWith("\"")
+        ? rawValue.slice(1, -1)
+        : rawValue;
+  }
+
+  return attrs;
+}
+
+function matchesPreferredAudio(attrs, preferredAudio) {
+  const candidates = [
+    attrs.LANGUAGE,
+    attrs.NAME,
+    attrs["GROUP-ID"],
+    attrs.CHARACTERISTICS
+  ];
+
+  return candidates.some((value) => {
+    const normalizedValue = normalizeAudioPreference(value);
+
+    if (!normalizedValue) {
+      return false;
+    }
+
+    return (
+      normalizedValue === preferredAudio ||
+      normalizedValue.includes(preferredAudio) ||
+      preferredAudio.includes(normalizedValue)
+    );
+  });
+}
+
+function normalizeAudioPreference(value) {
+  const normalized = cleanText(value).toLowerCase().replace(/[^a-z]/g, "");
+
+  if (!normalized) {
+    return "";
+  }
+
+  if (normalized === "hi" || normalized === "hin" || normalized.includes("hindi")) {
+    return "hi";
+  }
+
+  if (normalized === "en" || normalized.includes("english")) {
+    return "en";
+  }
+
+  if (normalized === "ja" || normalized.includes("japanese")) {
+    return "ja";
+  }
+
+  return normalized;
+}
+
+function normalizeAudioMode(value) {
+  const normalized = cleanText(value).toLowerCase();
+  return normalized === "only" ? "only" : normalized === "default" ? "default" : "";
 }
 
 function isPlaylistRequest(url, contentType) {
@@ -300,7 +481,7 @@ function parseAllowedUrl(value) {
   }
 }
 
-function buildWorkerFallbackUrl(upstreamUrl, referer) {
+function buildWorkerFallbackUrl(upstreamUrl, referer, preferredAudio = "", audioMode = "") {
   if (!upstreamUrl) {
     return null;
   }
@@ -314,6 +495,14 @@ function buildWorkerFallbackUrl(upstreamUrl, referer) {
 
   if (referer) {
     fallbackUrl.searchParams.set("referer", referer);
+  }
+
+  if (preferredAudio) {
+    fallbackUrl.searchParams.set("audio", preferredAudio);
+  }
+
+  if (audioMode) {
+    fallbackUrl.searchParams.set("audioMode", audioMode);
   }
 
   return fallbackUrl;
