@@ -21,6 +21,7 @@ const ALLOWED_HOSTS = new Set([
 const ALLOWED_HOST_SUFFIXES = [
   ".rpmstream.live",
   ".playerp2p.live",
+  ".vmeas.cloud",
   ".vidmoly.me",
   ".vidmoly.net",
   ".vmwesa.online",
@@ -321,6 +322,12 @@ function rewritePreferredAudioPlaylist(playlistText, preferredAudio, audioMode) 
   }
 
   const lines = playlistText.split(/\r?\n/);
+  const hasAudioMedia = lines.some((line) => line.trim().startsWith("#EXT-X-MEDIA:TYPE=AUDIO"));
+
+  if (!hasAudioMedia) {
+    return rewriteCombinedAudioVariantPlaylist(playlistText, normalizedPreference);
+  }
+
   const matchingIndexes = [];
 
   for (let index = 0; index < lines.length; index += 1) {
@@ -375,6 +382,16 @@ function rewritePreferredAudioPlaylist(playlistText, preferredAudio, audioMode) 
     .join("\n");
 }
 
+function rewriteCombinedAudioVariantPlaylist(playlistText, preferredAudio) {
+  const audioSlot = resolveCombinedAudioSlot(preferredAudio);
+
+  if (!audioSlot) {
+    return playlistText;
+  }
+
+  return playlistText.replace(/-a\d+(\.m3u8\b)/gi, `-${audioSlot}$1`);
+}
+
 function updateManifestBooleanAttribute(line, name, enabled) {
   const value = enabled ? "YES" : "NO";
   const pattern = new RegExp(`([,])${name}=(YES|NO)`, "i");
@@ -426,10 +443,14 @@ function matchesPreferredAudio(attrs, preferredAudio) {
 }
 
 function normalizeAudioPreference(value) {
-  const normalized = cleanText(value).toLowerCase().replace(/[^a-z]/g, "");
+  const normalized = cleanText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 
   if (!normalized) {
     return "";
+  }
+
+  if (/^a\d+$/.test(normalized)) {
+    return normalized;
   }
 
   if (normalized === "hi" || normalized === "hin" || normalized.includes("hindi")) {
@@ -445,6 +466,22 @@ function normalizeAudioPreference(value) {
   }
 
   return normalized;
+}
+
+function resolveCombinedAudioSlot(preferredAudio) {
+  if (!preferredAudio) {
+    return "";
+  }
+
+  if (/^a\d+$/.test(preferredAudio)) {
+    return preferredAudio;
+  }
+
+  if (preferredAudio === "hi") {
+    return "a1";
+  }
+
+  return "";
 }
 
 function normalizeAudioMode(value) {
