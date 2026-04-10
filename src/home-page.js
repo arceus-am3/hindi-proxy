@@ -210,8 +210,8 @@ export function renderHomePage(origin) {
         <div class="eyebrow">Hindi Proxy Endpoint</div>
         <h1>Ready to proxy HLS streams.</h1>
         <p class="lead">
-          Yeh homepage aapke live endpoint URLs dikhata hai. `url` query me upstream
-          playlist ya media URL do, aur optional `referer`, `audio`, `audioMode` bhi pass kar sakte ho.
+        Yeh homepage aapke live endpoint URLs dikhata hai. <code>url</code> query me upstream
+playlist ya media URL do, aur optional <code>referer</code>, <code>audio</code>, <code>audioMode</code> bhi pass kar sakte ho.
         </p>
 
         <div class="pill-list">
@@ -263,7 +263,7 @@ export function renderHomePage(origin) {
 
         <article class="card">
           <h2>Allowed Query Params</h2>
-          <p>`url` required hai. Baaki params optional hain.</p>
+         <p><code>url</code> required hai. Baaki params optional hain.</p>
           <code>url=
 referer=
 audio=hi
