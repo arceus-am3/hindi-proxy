@@ -1,4 +1,4 @@
-name = "inanime-hindi-proxy"
+name = "hindi-proxy"
 main = "worker.js"
 compatibility_date = "2026-04-10"
 workers_dev = true
