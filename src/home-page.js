@@ -242,7 +242,7 @@ playlist ya media URL do, aur optional <code>referer</code>, <code>audio</code>,
 
           <article class="card">
             <h2>Alias Endpoint v2</h2>
-            <p>Isko use kar sakte ho agar client already `/api/v2/proxy` hit karta hai.</p>
+            <p>Isko use kar sakte ho agar client already <code>/api/v2/proxy</code> hit karta hai.</p>
             <div class="code-row">
               <code id="endpoint-v2">${escapeHtml(endpoints[2])}</code>
               <button type="button" data-copy="endpoint-v2">Copy</button>
