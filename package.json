@@ -1,0 +1,12 @@
+{
+  "name": "desidub-proxy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:worker": "wrangler dev",
+    "deploy:worker": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.11.1"
+  }
+}

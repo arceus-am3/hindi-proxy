@@ -1,0 +1,6 @@
+name = "hindi-proxy"
+main = "worker.js"
+compatibility_date = "2026-04-10"
+workers_dev = true
+[vars]
+ANIMESALT_WORKER_PROXY = "https://anime-hindi.inanime-app.workers.dev/api/v2/proxy"
