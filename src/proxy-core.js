@@ -167,8 +167,7 @@ export async function handleProxyRequest(request, options = {}) {
     });
   }
 
-  const body =
-    request.method === "HEAD" ? null : upstream.body || (await upstream.arrayBuffer());
+const body = request.method === "HEAD" ? null : upstream.body;
 
   return createResponse(body, {
     status: upstream.status,
@@ -251,6 +250,11 @@ function buildResponseHeaders(sourceHeaders) {
   }
 
   headers.set("cache-control", STREAM_CACHE_CONTROL);
+
+  // 🔥 YAHI DAALNA HAI
+  headers.set("Accept-Ranges", "bytes");
+  headers.set("Transfer-Encoding", "chunked");
+
   return headers;
 }
 
