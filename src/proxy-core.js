@@ -165,9 +165,14 @@ export async function handleProxyRequest(request, options = {}) {
       status: upstream.status,
       headers
     });
-  }
+}
 
-const body = request.method === "HEAD" ? null : upstream.body;
+  const body =
+    request.method === "HEAD"
+      ? null
+      : upstream.body
+      ? upstream.body
+      : (await upstream.arrayBuffer());
 
   return createResponse(body, {
     status: upstream.status,
@@ -250,27 +255,7 @@ function buildResponseHeaders(sourceHeaders) {
   }
 
   headers.set("cache-control", STREAM_CACHE_CONTROL);
-
-  // 🔥 YAHI DAALNA HAI
-  headers.set("Accept-Ranges", "bytes");
-  headers.set("Transfer-Encoding", "chunked");
-
   return headers;
-}
-
-function rewriteHlsPlaylist(
-  playlistText,
-  sourceUrl,
-  proxyEndpoint,
-  referer,
-  options = {}
-) {
-  return playlistText
-    .split(/\r?\n/)
-    .map((line) =>
-      rewritePlaylistLine(line, sourceUrl, proxyEndpoint, referer, options)
-    )
-    .join("\n");
 }
 
 function rewritePlaylistLine(
@@ -282,29 +267,47 @@ function rewritePlaylistLine(
 ) {
   const trimmed = line.trim();
 
-  if (!trimmed) {
-    return line;
-  }
+  if (!trimmed) return line;
 
+  // 👉 comments (audio, subtitles)
   if (trimmed.startsWith("#")) {
     return line.replace(/URI="([^"]+)"/g, (_, value) => {
-      const rewritten = buildMediaProxyUrl(
-        proxyEndpoint,
-        new URL(value, sourceUrl).toString(),
-        referer,
-        options
-      );
+      const absolute = new URL(value, sourceUrl).toString();
 
-      return `URI="${rewritten}"`;
+      // 🔥 IMPORTANT: .m3u8 ही proxy करो
+      if (absolute.includes(".m3u8")) {
+        return `URI="${buildMediaProxyUrl(
+          proxyEndpoint,
+          absolute,
+          referer,
+          options
+        )}"`;
+      }
+
+      // ❌ बाकी direct
+      return `URI="${absolute}"`;
     });
   }
 
+  const absolute = new URL(trimmed, sourceUrl).toString();
+
+ const urlObj = new URL(absolute);
+const path = urlObj.pathname.toLowerCase();
+
+if (path.endsWith(".ts") || path.endsWith(".mp4")) {
+  return absolute; // ✅ always safe
+}
+
+if (path.endsWith(".m3u8")) {
   return buildMediaProxyUrl(
     proxyEndpoint,
-    new URL(trimmed, sourceUrl).toString(),
+    absolute,
     referer,
     options
   );
+}
+
+  return absolute;
 }
 
 function buildMediaProxyUrl(

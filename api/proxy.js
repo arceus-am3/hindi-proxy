@@ -69,6 +69,10 @@ async function sendNodeResponse(res, response) {
     return;
   }
 
-  Readable.fromWeb(response.body).pipe(res);
+  const readable = Readable.fromWeb(response.body);
+  readable.on("error", (err) => {
+    console.error("Stream error:", err.message);
+  });
+  readable.pipe(res);
 }
 
