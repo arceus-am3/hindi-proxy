@@ -13,8 +13,7 @@ export default async function handler(req, res) {
     const request = createNodeRequest(req);
     const response = await handleProxyRequest(request, {
       proxyPath: "/api/proxy",
-      workerProxyUrl: process.env.ANIMESALT_WORKER_PROXY || "",
-      fallbackProxyUrl: process.env.ANIMESALT_FALLBACK_PROXY || ""
+      workerProxyUrl: process.env.ANIMESALT_WORKER_PROXY || ""
     });
 
     await sendNodeResponse(res, response);

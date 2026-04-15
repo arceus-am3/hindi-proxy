@@ -21,8 +21,7 @@ export default {
 
     return handleProxyRequest(request, {
       proxyPath: "/api/proxy",
-      workerProxyUrl: env?.ANIMESALT_WORKER_PROXY || "",
-      fallbackProxyUrl: env?.ANIMESALT_FALLBACK_PROXY || ""
+      workerProxyUrl: env?.ANIMESALT_WORKER_PROXY || ""
     });
   }
 };

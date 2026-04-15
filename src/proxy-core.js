@@ -61,7 +61,6 @@ const JSON_HEADERS = {
 export async function handleProxyRequest(request, options = {}) {
   const proxyPath = options.proxyPath || "/api/proxy";
   const workerProxyUrl = cleanText(options.workerProxyUrl);
-  const fallbackProxyUrl = cleanText(options.fallbackProxyUrl);
   const requestUrl = new URL(request.url);
   const proxyEndpoint = new URL(proxyPath, requestUrl.origin).toString();
 
@@ -113,14 +112,6 @@ export async function handleProxyRequest(request, options = {}) {
     preferredAudio,
     audioMode
   );
-  const recoveryProxyUrl = buildRecoveryProxyUrl(
-    fallbackProxyUrl,
-    requestUrl,
-    upstreamUrl,
-    referer,
-    preferredAudio,
-    audioMode
-  );
 
   if (!upstreamUrl) {
     return jsonResponse(403, { error: "Blocked upstream host" });
@@ -142,14 +133,6 @@ export async function handleProxyRequest(request, options = {}) {
   const primaryTarget = workerFallbackUrl || upstreamUrl;
   let upstream = await fetch(primaryTarget, upstreamInit);
   let responseSource = workerFallbackUrl ? "worker-fallback" : "direct";
-
-  if (!upstream.ok && recoveryProxyUrl && shouldRetryViaFallbackProxy(upstream.status)) {
-    upstream = await fetch(recoveryProxyUrl, {
-      ...upstreamInit,
-      headers: buildProxyForwardHeaders(request.headers)
-    });
-    responseSource = "proxy-fallback";
-  }
 
   if (!upstream.ok) {
     return jsonResponse(upstream.status, {
@@ -645,51 +628,12 @@ function buildWorkerFallbackUrl(
   return fallbackUrl.toString();
 }
 
-function buildRecoveryProxyUrl(
-  fallbackProxyUrl,
-  requestUrl,
-  upstreamUrl,
-  referer,
-  preferredAudio = "",
-  audioMode = ""
-) {
-  if (!fallbackProxyUrl || !upstreamUrl) {
-    return null;
-  }
-
-  const fallbackUrl = parseWorkerProxyUrl(fallbackProxyUrl);
-
-  if (!fallbackUrl || isSameProxyTarget(fallbackUrl, requestUrl)) {
-    return null;
-  }
-
-  fallbackUrl.searchParams.set("url", upstreamUrl.toString());
-
-  if (referer) {
-    fallbackUrl.searchParams.set("referer", referer);
-  }
-
-  if (preferredAudio) {
-    fallbackUrl.searchParams.set("audio", preferredAudio);
-  }
-
-  if (audioMode) {
-    fallbackUrl.searchParams.set("audioMode", audioMode);
-  }
-
-  return fallbackUrl.toString();
-}
-
 function parseWorkerProxyUrl(value) {
   try {
     return new URL(value);
   } catch {
     return null;
   }
-}
-
-function shouldRetryViaFallbackProxy(status) {
-  return status === 403 || status === 429 || status >= 500;
 }
 
 function isSameProxyTarget(proxyUrl, requestUrl) {
