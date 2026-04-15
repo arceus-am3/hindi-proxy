@@ -50,7 +50,10 @@ const RESPONSE_HEADER_PASSTHROUGH = [
   "content-range",
   "content-disposition"
 ];
-const STREAM_CACHE_CONTROL = "public, max-age=60";
+const PLAYLIST_CACHE_CONTROL = "public, max-age=5, s-maxage=5, stale-while-revalidate=30";
+const SEGMENT_CACHE_CONTROL =
+  "public, max-age=86400, s-maxage=604800, stale-while-revalidate=86400, immutable";
+const DEFAULT_CACHE_CONTROL = "public, max-age=60, s-maxage=300, stale-while-revalidate=60";
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8"
 };
@@ -58,6 +61,7 @@ const JSON_HEADERS = {
 export async function handleProxyRequest(request, options = {}) {
   const proxyPath = options.proxyPath || "/api/proxy";
   const workerProxyUrl = cleanText(options.workerProxyUrl);
+  const fallbackProxyUrl = cleanText(options.fallbackProxyUrl);
   const requestUrl = new URL(request.url);
   const proxyEndpoint = new URL(proxyPath, requestUrl.origin).toString();
 
@@ -109,6 +113,14 @@ export async function handleProxyRequest(request, options = {}) {
     preferredAudio,
     audioMode
   );
+  const recoveryProxyUrl = buildRecoveryProxyUrl(
+    fallbackProxyUrl,
+    requestUrl,
+    upstreamUrl,
+    referer,
+    preferredAudio,
+    audioMode
+  );
 
   if (!upstreamUrl) {
     return jsonResponse(403, { error: "Blocked upstream host" });
@@ -127,15 +139,29 @@ export async function handleProxyRequest(request, options = {}) {
     upstreamInit.duplex = "half";
   }
 
-  const upstream = await fetch(workerFallbackUrl || upstreamUrl, upstreamInit);
+  const primaryTarget = workerFallbackUrl || upstreamUrl;
+  let upstream = await fetch(primaryTarget, upstreamInit);
+  let responseSource = workerFallbackUrl ? "worker-fallback" : "direct";
+
+  if (!upstream.ok && recoveryProxyUrl && shouldRetryViaFallbackProxy(upstream.status)) {
+    upstream = await fetch(recoveryProxyUrl, {
+      ...upstreamInit,
+      headers: buildProxyForwardHeaders(request.headers)
+    });
+    responseSource = "proxy-fallback";
+  }
 
   if (!upstream.ok) {
     return jsonResponse(upstream.status, {
-      error: `Upstream fetch failed: ${upstream.status}`
+      error: `Upstream fetch failed: ${upstream.status}`,
+      host: upstreamUrl.hostname,
+      source: responseSource
     });
   }
 
   const headers = buildResponseHeaders(upstream.headers);
+  applyCachePolicy(headers, upstreamUrl, upstream.headers.get("content-type"));
+  headers.set("x-proxy-source", responseSource);
 
   if (
     !workerFallbackUrl &&
@@ -254,8 +280,27 @@ function buildResponseHeaders(sourceHeaders) {
     }
   }
 
-  headers.set("cache-control", STREAM_CACHE_CONTROL);
   return headers;
+}
+
+function applyCachePolicy(headers, upstreamUrl, contentType) {
+  const cacheControl = resolveCacheControl(upstreamUrl, contentType);
+
+  headers.set("cache-control", cacheControl);
+  headers.set("cdn-cache-control", cacheControl);
+  headers.set("vercel-cdn-cache-control", cacheControl);
+}
+
+function resolveCacheControl(url, contentType) {
+  if (isPlaylistRequest(url, contentType)) {
+    return PLAYLIST_CACHE_CONTROL;
+  }
+
+  if (isMediaSegmentRequest(url, contentType)) {
+    return SEGMENT_CACHE_CONTROL;
+  }
+
+  return DEFAULT_CACHE_CONTROL;
 }
 
 function rewriteHlsPlaylist(
@@ -522,6 +567,27 @@ function isPlaylistRequest(url, contentType) {
   return PLAYLIST_CONTENT_TYPES.some((type) => normalizedType.includes(type));
 }
 
+function isMediaSegmentRequest(url, contentType) {
+  const pathname = cleanText(url?.pathname).toLowerCase();
+  const normalizedType = cleanText(contentType).toLowerCase();
+
+  if (
+    /\.(ts|m4s|mp4|m4v|cmfv|aac|mp3|vtt|webvtt|jpg|jpeg|png|webp|avif|key)$/i.test(
+      pathname
+    )
+  ) {
+    return true;
+  }
+
+  return [
+    "video/",
+    "audio/",
+    "application/octet-stream",
+    "binary/octet-stream",
+    "application/mp4"
+  ].some((type) => normalizedType.includes(type));
+}
+
 function parseAllowedUrl(value) {
   try {
     const parsed = new URL(value);
@@ -579,12 +645,51 @@ function buildWorkerFallbackUrl(
   return fallbackUrl.toString();
 }
 
+function buildRecoveryProxyUrl(
+  fallbackProxyUrl,
+  requestUrl,
+  upstreamUrl,
+  referer,
+  preferredAudio = "",
+  audioMode = ""
+) {
+  if (!fallbackProxyUrl || !upstreamUrl) {
+    return null;
+  }
+
+  const fallbackUrl = parseWorkerProxyUrl(fallbackProxyUrl);
+
+  if (!fallbackUrl || isSameProxyTarget(fallbackUrl, requestUrl)) {
+    return null;
+  }
+
+  fallbackUrl.searchParams.set("url", upstreamUrl.toString());
+
+  if (referer) {
+    fallbackUrl.searchParams.set("referer", referer);
+  }
+
+  if (preferredAudio) {
+    fallbackUrl.searchParams.set("audio", preferredAudio);
+  }
+
+  if (audioMode) {
+    fallbackUrl.searchParams.set("audioMode", audioMode);
+  }
+
+  return fallbackUrl.toString();
+}
+
 function parseWorkerProxyUrl(value) {
   try {
     return new URL(value);
   } catch {
     return null;
   }
+}
+
+function shouldRetryViaFallbackProxy(status) {
+  return status === 403 || status === 429 || status >= 500;
 }
 
 function isSameProxyTarget(proxyUrl, requestUrl) {
