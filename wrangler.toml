@@ -2,6 +2,3 @@ name = "hindi-proxy"
 main = "worker.js"
 compatibility_date = "2026-04-10"
 workers_dev = true
-[vars]
-ANIMESALT_WORKER_PROXY = "https://example.com"
-ANIMESALT_FALLBACK_PROXY = "https://example2.com"
